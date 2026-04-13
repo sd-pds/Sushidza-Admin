@@ -3,7 +3,7 @@
   const workerUrl = String(cfg.workerUrl || '').replace(/\/$/, '');
   const assetBaseUrl = String(cfg.assetBaseUrl || '').replace(/\/$/, '');
   const passwordStorageKey = cfg.passwordStorageKey || 'sushidza_admin_password';
-  const ordersRefreshMs = Number(cfg.ordersRefreshMs || 15000);
+  const ordersRefreshMs = Number(cfg.ordersRefreshMs || 120000);
 
   const els = {
     products: document.getElementById('products'),
@@ -15,8 +15,12 @@
     modalTitle: document.getElementById('modalTitle'),
     authModal: document.getElementById('authModal'),
     authForm: document.getElementById('authForm'),
+    gateAuthForm: document.getElementById('gateAuthForm'),
+    adminGate: document.getElementById('adminGate'),
     authBtn: document.getElementById('authBtn'),
     saveBtn: document.getElementById('saveBtn'),
+    mobileMenuBtn: document.getElementById('mobileMenuBtn'),
+    mobileMenuSheet: document.getElementById('mobileMenuSheet'),
     addProductBtn: document.getElementById('addProductBtn'),
     reloadBtn: document.getElementById('reloadBtn'),
     addPromoCodeBtn: document.getElementById('addPromoCodeBtn'),
@@ -59,11 +63,13 @@
     promocodes: [],
     originalMenuJson: '[]\n',
     originalPromocodesJson: '[]\n',
+    originalPromotionsJson: '[]\n',
     category: 'Все',
     query: '',
     password: sessionStorage.getItem(passwordStorageKey) || '',
     sha: '',
     promoCodesSha: '',
+    promotionsSha: '',
     repoInfo: null,
     source: '',
     dirty: false,
@@ -81,7 +87,8 @@
     ordersQuery: '',
     ordersLoaded: false,
     ordersLoading: false,
-    ordersRefreshTimer: null
+    ordersRefreshTimer: null,
+    activeSection: 'menu'
   };
 
   function escapeHtml(value) {
@@ -107,6 +114,40 @@
     }, 2600);
   }
 
+  function setActiveSection(section) {
+    state.activeSection = section || 'menu';
+
+    document.querySelectorAll('[data-admin-section]').forEach((el) => {
+      const current = el.getAttribute('data-admin-section');
+      const isActive = current === state.activeSection;
+      if (isActive) el.removeAttribute('hidden');
+      else if (current !== 'menu' || state.activeSection !== 'menu') el.setAttribute('hidden', 'hidden');
+    });
+
+    document.querySelectorAll('[data-section-link]').forEach((link) => {
+      const current = link.getAttribute('data-section-link');
+      link.classList.toggle('isActive', current === state.activeSection);
+    });
+  }
+
+  function toggleMobileMenu(open) {
+    if (!els.mobileMenuSheet) return;
+    const shouldOpen = typeof open === 'boolean' ? open : els.mobileMenuSheet.hasAttribute('hidden');
+    if (shouldOpen) {
+      els.mobileMenuSheet.removeAttribute('hidden');
+      document.body.classList.add('mobileMenuOpen');
+    } else {
+      els.mobileMenuSheet.setAttribute('hidden', 'hidden');
+      document.body.classList.remove('mobileMenuOpen');
+    }
+  }
+
+  function eyeIconMarkup(isVisible) {
+    return isVisible
+      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5c5.5 0 9.6 4 11 7-1.4 3-5.5 7-11 7S2.4 15 1 12c1.4-3 5.5-7 11-7Zm0 2C8 7 4.8 9.8 3.2 12 4.8 14.2 8 17 12 17s7.2-2.8 8.8-5C19.2 9.8 16 7 12 7Zm0 2.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z"/></svg>'
+      : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3.3 2 18.7 18.7-1.4 1.4-3.2-3.2A13.4 13.4 0 0 1 12 20c-5.5 0-9.6-4-11-7 1-2.1 3.3-4.7 6.5-6.2L1.9 3.4 3.3 2Zm6 6 1.6 1.6a2.5 2.5 0 0 0 3.5 3.5l1.6 1.6A4.5 4.5 0 0 1 9.3 8Zm2.7-3c5.5 0 9.6 4 11 7-.8 1.7-2.4 3.6-4.7 5.1l-1.4-1.4c1.8-1.2 3.1-2.6 4-3.7C19.2 9.8 16 7 12 7c-1 0-2 .2-2.9.5L7.5 5.9C8.9 5.3 10.4 5 12 5Z"/></svg>';
+  }
+
   function setBadge(el, text, kind = '') {
     if (!el) return;
     el.textContent = text;
@@ -122,6 +163,17 @@
     return `${assetBaseUrl}/${value.replace(/^\.\//, '').replace(/^\//, '')}`;
   }
 
+  function updateGateView() {
+    if (!els.adminGate) return;
+    if (state.unlocked) {
+      els.adminGate.setAttribute('hidden', 'hidden');
+      document.body.classList.add('adminUnlocked');
+    } else {
+      els.adminGate.removeAttribute('hidden');
+      document.body.classList.remove('adminUnlocked');
+    }
+  }
+
   function updateLockScreen() {
     if (!els.lockScreen) return;
     els.lockScreen.hidden = state.unlocked;
@@ -130,10 +182,13 @@
   function calcDirty() {
     const currentMenu = JSON.stringify(state.menu, null, 2) + '\n';
     const currentCodes = JSON.stringify({ promocodes: state.promocodes }, null, 2) + '\n';
+    const currentPromotions = JSON.stringify(state.promotions, null, 2) + '\n';
     const currentZonesDay = JSON.stringify(state.deliveryZonesDay, null, 2) + '\n';
     const currentZonesNight = JSON.stringify(state.deliveryZonesNight, null, 2) + '\n';
-    state.dirty = currentMenu !== state.originalMenuJson || currentCodes !== state.originalPromocodesJson || currentZonesDay !== state.originalZonesDayJson || currentZonesNight !== state.originalZonesNightJson;
+    state.dirty = currentMenu !== state.originalMenuJson || currentCodes !== state.originalPromocodesJson || currentPromotions !== state.originalPromotionsJson || currentZonesDay !== state.originalZonesDayJson || currentZonesNight !== state.originalZonesNightJson;
     if (els.statChanged) els.statChanged.textContent = state.dirty ? '1+' : '0';
+    if (els.saveBtn) els.saveBtn.classList.toggle('isShown', !!state.dirty);
+    if (els.saveBtn) els.saveBtn.classList.toggle('isShown', !!state.dirty);
     if (els.statOrders) els.statOrders.textContent = state.ordersTotal || 0;
     document.title = `${state.dirty ? '❗️ НЕ СОХРАНЕНО ' : ''}СУШИДЗА — панель управления меню`;
   }
@@ -145,9 +200,6 @@
     if (els.statPromocodes) els.statPromocodes.textContent = state.promocodes.length;
     calcDirty();
   }
-
-
-
 
   function formatOrderDate(value) {
     const date = value ? new Date(value) : null;
@@ -172,6 +224,7 @@
     })[String(status || '')] || 'Без статуса';
   }
 
+  
   function renderOrders() {
     if (!els.ordersList) return;
     if (!state.unlocked) {
@@ -184,58 +237,121 @@
       els.ordersList.innerHTML = '<div class="emptyState emptyState--glass">Загрузка заказов…</div>';
       return;
     }
+
     const count = Number(state.orders?.length || 0);
     const total = Number(state.ordersTotal || 0);
-    els.ordersSummary.textContent = count
-      ? `Найдено ${count} из ${total} заказов`
-      : 'Заказы по фильтру не найдены';
+    const q = String(state.ordersQuery || '').trim();
+    els.ordersSummary.textContent = q
+      ? (count ? `Найдено ${count} из ${total} заказов по запросу «${escapeHtml(q)}»` : 'По запросу заказы не найдены')
+      : (count ? `Найдено ${count} из ${total} заказов` : 'Заказы пока не найдены');
+
     if (!count) {
       els.ordersList.innerHTML = '<div class="emptyState emptyState--glass">Заказов пока нет.</div>';
       return;
     }
+
     els.ordersList.innerHTML = state.orders.map(order => {
+      const customerName = order.customer?.name || 'Не указано';
+      const customerPhone = order.customer?.phone || '—';
+      const deliveryType = order.delivery?.type === 'pickup' ? 'Самовывоз' : 'Доставка';
+      const address = order.delivery?.type === 'pickup'
+        ? (order.delivery?.restaurant || order.delivery?.address || '—')
+        : (order.delivery?.address || '—');
+
+      const details = [
+        order.delivery?.entrance ? `подъезд ${escapeHtml(order.delivery.entrance)}` : '',
+        order.delivery?.floor ? `этаж ${escapeHtml(order.delivery.floor)}` : '',
+        order.delivery?.flat ? `кв. ${escapeHtml(order.delivery.flat)}` : ''
+      ].filter(Boolean).join(' • ');
+
+      const whenText = order.when?.type === 'later' && order.when?.date
+        ? `Ко времени: ${escapeHtml(formatOrderDate(order.when.date))}`
+        : 'Ближайшее время';
+
+      const paymentText = order.paymentLabel || order.payment || '—';
+      const changeText = order.payment === 'cash' && order.changeFrom ? `Сдача с ${escapeHtml(String(order.changeFrom))} ₽` : '';
       const items = Array.isArray(order.items) ? order.items.map(item => `
         <div class="orderItemRow">
-          <span class="orderItemRow__name">${escapeHtml(item.name || 'Без названия')}</span>
-          <span class="orderItemRow__meta">×${Number(item.qty || 1)} • ${Number(item.sum || item.price || 0)} ₽</span>
+          <div class="orderItemRow__left">
+            <div class="orderItemRow__name">${escapeHtml(item.name || 'Без названия')}</div>
+            <div class="orderItemRow__sub">${escapeHtml(item.weight || '')}</div>
+          </div>
+          <div class="orderItemRow__right">
+            <div class="orderItemRow__qty">×${Number(item.qty || 1)}</div>
+            <div class="orderItemRow__sum">${Number(item.sum || item.price || 0)} ₽</div>
+          </div>
         </div>
       `).join('') : '';
-      const address = order.delivery?.type === 'pickup'
-        ? `Самовывоз • ${escapeHtml(order.delivery?.restaurant || order.delivery?.address || '—')}`
-        : escapeHtml(order.delivery?.address || '—');
+
+      const promoBlock = order.promo?.discount
+        ? `
+          <div class="orderMetaRow">
+            <span>Промокод</span>
+            <span>${escapeHtml(order.promo.title || order.promo.code || '—')} • −${Number(order.promo.discount || 0)} ₽</span>
+          </div>
+        `
+        : '';
+
+      const extraRows = `
+        <div class="orderMetaRow"><span>Сумма блюд</span><span>${Number(order.subtotal || 0)} ₽</span></div>
+        <div class="orderMetaRow"><span>Доставка</span><span>${Number(order.delivery?.price || 0)} ₽</span></div>
+        <div class="orderMetaRow"><span>Приборы</span><span>${Number(order.cutlery?.price || 0)} ₽${Number(order.cutlery?.count || 0) ? ` • ${Number(order.cutlery.count)} перс.` : ''}</span></div>
+        ${Number(order.pricing?.nightMarkup || 0) ? `<div class="orderMetaRow"><span>Ночная наценка</span><span>+${Number(order.pricing.nightMarkup)} ₽</span></div>` : ''}
+        ${Number(order.pricing?.happyHoursDiscount || 0) ? `<div class="orderMetaRow"><span>Счастливые часы</span><span>−${Number(order.pricing.happyHoursDiscount)} ₽</span></div>` : ''}
+        ${promoBlock}
+      `;
+
       return `
         <article class="orderCard">
           <div class="orderCard__head">
             <div>
-              <div class="orderCard__id">#${escapeHtml(order.id || '—')}</div>
+              <div class="orderCard__id">Заказ #${escapeHtml(order.id || '—')}</div>
               <div class="orderCard__date">${escapeHtml(formatOrderDate(order.createdAt))}</div>
             </div>
-            <div class="orderStatusBadge is-${escapeHtml(String(order.status || 'new'))}">${escapeHtml(orderStatusLabel(order.status))}</div>
+            <div class="orderCard__badge">${escapeHtml(deliveryType)}</div>
           </div>
-          <div class="orderCard__grid">
+
+          <div class="orderCard__grid orderCard__grid--top">
             <div class="orderCard__block">
               <div class="orderCard__label">Клиент</div>
-              <div class="orderCard__value">${escapeHtml(order.customer?.name || '—')}</div>
-              <div class="orderCard__sub">${escapeHtml(order.customer?.phone || '—')}</div>
-            </div>
-            <div class="orderCard__block">
-              <div class="orderCard__label">Получение</div>
-              <div class="orderCard__value">${escapeHtml(order.delivery?.type === 'pickup' ? 'Самовывоз' : 'Доставка')}</div>
-              <div class="orderCard__sub">${address}</div>
+              <div class="orderCard__value">${escapeHtml(customerName)}</div>
+              <div class="orderCard__sub">${escapeHtml(customerPhone)}</div>
             </div>
             <div class="orderCard__block">
               <div class="orderCard__label">Оплата</div>
-              <div class="orderCard__value">${escapeHtml(order.paymentLabel || order.payment || '—')}</div>
-              <div class="orderCard__sub">${escapeHtml(order.when?.type === 'later' && order.when?.date ? 'На ' + formatOrderDate(order.when.date) : 'Ближайшее время')}</div>
-            </div>
-            <div class="orderCard__block orderCard__block--total">
-              <div class="orderCard__label">Итог</div>
-              <div class="orderCard__value">${Number(order.total || 0)} ₽</div>
-              <div class="orderCard__sub">${escapeHtml(order.site || 'prozharim')}</div>
+              <div class="orderCard__value">${escapeHtml(paymentText)}</div>
+              <div class="orderCard__sub">${changeText ? escapeHtml(changeText) : 'Без сдачи'}</div>
             </div>
           </div>
-          <div class="orderCard__items">${items || '<div class="orderItemRow">Состав заказа не найден</div>'}</div>
-          ${order.comment ? `<div class="orderCard__comment">Комментарий: ${escapeHtml(order.comment)}</div>` : ''}
+
+          <div class="orderCard__block">
+            <div class="orderCard__label">Адрес и получение</div>
+            <div class="orderCard__value">${escapeHtml(address)}</div>
+            <div class="orderCard__sub">${details || 'Без доп. данных'} • ${escapeHtml(whenText)}</div>
+          </div>
+
+          <div class="orderCard__items">
+            <div class="orderCard__label">Состав заказа</div>
+            ${items || '<div class="orderItemRow">Состав заказа не найден</div>'}
+          </div>
+
+          <div class="orderCard__block">
+            <div class="orderCard__label">Итоги</div>
+            <div class="orderMetaList">
+              ${extraRows}
+            </div>
+            <div class="orderCard__totalRow">
+              <span>Итого</span>
+              <strong>${Number(order.total || 0)} ₽</strong>
+            </div>
+          </div>
+
+          ${order.comment ? `
+            <div class="orderCard__comment">
+              <span class="orderCard__label">Комментарий клиента</span>
+              <div>${escapeHtml(order.comment)}</div>
+            </div>
+          ` : ''}
         </article>
       `;
     }).join('');
@@ -365,7 +481,7 @@
 
   function renderTabs() {
     if (!els.tabs) return;
-    const cats = ['Все', ...Array.from(new Set(state.menu.map(item => item.category).filter(Boolean)))];
+    const cats = ['Все', 'Скрытые', ...Array.from(new Set(state.menu.map(item => item.category).filter(Boolean)))];
     els.tabs.innerHTML = '';
     cats.forEach(cat => {
       const btn = document.createElement('button');
@@ -384,16 +500,22 @@
   function getFilteredMenu() {
     let list = state.menu.slice();
     const q = state.query.trim().toLowerCase();
-    if (state.category !== 'Все') list = list.filter(item => item.category === state.category);
-    if (q) list = list.filter(item => [item.name, item.desc, item.category, item.id].some(v => String(v || '').toLowerCase().includes(q)));
+    if (state.category === 'Скрытые') list = list.filter(item => item.visible === false);
+    else if (state.category !== 'Все') list = list.filter(item => item.category === state.category);
+    if (q) list = list.filter(item => [item.name, item.desc, item.category, item.id, item.weight].some(v => String(v || '').toLowerCase().includes(q)));
     return list;
   }
 
   function cardActions(itemIndex) {
+    const item = state.menu[itemIndex] || {};
+    const isVisible = item.visible !== false;
     return `
       <div class="adminCardActions">
         <button class="iconMiniBtn" type="button" data-edit="${itemIndex}" title="Редактировать" aria-label="Редактировать">
           <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25Zm2.92 2.33H5v-.92l8.06-8.06.92.92L5.92 19.58ZM20.71 5.63a1 1 0 0 0 0-1.41l-.93-.92a1 1 0 0 0-1.41 0l-1.17 1.17 2.34 2.34 1.17-1.18Z"/></svg>
+        </button>
+        <button class="iconMiniBtn ${isVisible ? '' : 'iconMiniBtn--warn'}" type="button" data-toggle-visible="${itemIndex}" title="${isVisible ? 'Скрыть товар' : 'Показать товар'}" aria-label="${isVisible ? 'Скрыть товар' : 'Показать товар'}">
+          ${eyeIconMarkup(isVisible)}
         </button>
         <button class="iconMiniBtn iconMiniBtn--danger" type="button" data-delete="${itemIndex}" title="Удалить" aria-label="Удалить">
           <svg viewBox="0 0 24 24"><path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7Zm3-4h6l1 2h4v2H4V5h4l1-2Z"/></svg>
@@ -401,6 +523,7 @@
       </div>`;
   }
 
+  
   function renderProducts() {
     if (!els.products) return;
     const list = getFilteredMenu();
@@ -417,18 +540,20 @@
     list.forEach(item => {
       const originalIndex = state.menu.indexOf(item);
       const card = document.createElement('article');
-      card.className = 'card adminProductCard';
+      card.className = 'card adminProductCard' + (item.visible === false ? ' adminProductCard--hidden' : '');
       card.innerHTML = `
         <div class="card__body adminProductCard__body">
           <div class="adminPreview">
             <img class="card__img adminProductCard__img" src="${escapeHtml(normalizeImg(item.img))}" alt="${escapeHtml(item.name)}" loading="lazy">
+
             <div class="adminProductCard__content">
               <div class="card__cat">${escapeHtml(item.category || 'Без категории')}</div>
               <div class="card__name">${escapeHtml(item.name || 'Без названия')}</div>
+              <div class="card__desc adminProductCard__desc">${escapeHtml(item.desc || 'Описание не заполнено')}</div>
             </div>
+
             <div class="adminProductCard__bottom">
               <div class="adminProductCard__meta">
-                <div class="card__desc">${escapeHtml(item.desc || 'Описание не заполнено')}</div>
                 <div class="price">${Number(item.price || 0)} ₽</div>
                 <div class="meta">${escapeHtml(item.weight || 'Без веса')}${item.hit ? ' • Хит' : ''}</div>
               </div>
@@ -446,14 +571,21 @@
       els.promoGrid.innerHTML = '<div class="emptyState emptyState--glass">Доступ заблокирован</div>';
       return;
     }
-    const cards = state.promotions.map((item, index) => `
-      <article class="promoAdminCard">
+    const cards = state.promotions.map((item, index) => {
+      const isVisible = item.visible !== false;
+      return `
+      <article class="promoAdminCard ${!isVisible ? 'promoAdminCard--hidden' : ''}">
         <img src="${escapeHtml(normalizeImg(item.path))}" alt="Акция ${index + 1}" loading="lazy">
-        <button class="iconMiniBtn iconMiniBtn--danger promoAdminDelete" type="button" data-delete-promo="${escapeHtml(item.path)}" aria-label="Удалить баннер" title="Удалить баннер">
-          <svg viewBox="0 0 24 24"><path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7Zm3-4h6l1 2h4v2H4V5h4l1-2Z"/></svg>
-        </button>
+        <div class="promoAdminCard__actions">
+          <button class="iconMiniBtn ${isVisible ? '' : 'iconMiniBtn--warn'}" type="button" data-toggle-promo-visible="${index}" title="${isVisible ? 'Скрыть баннер' : 'Показать баннер'}" aria-label="${isVisible ? 'Скрыть баннер' : 'Показать баннер'}">
+            ${eyeIconMarkup(isVisible)}
+          </button>
+          <button class="iconMiniBtn iconMiniBtn--danger promoAdminDelete" type="button" data-delete-promo="${escapeHtml(item.path)}" aria-label="Удалить баннер" title="Удалить баннер">
+            <svg viewBox="0 0 24 24"><path d="M6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7Zm3-4h6l1 2h4v2H4V5h4l1-2Z"/></svg>
+          </button>
+        </div>
       </article>
-    `).join('');
+    `}).join('');
     els.promoGrid.innerHTML = cards + `
       <button class="promoAdminAdd" type="button" id="promoAddTile" aria-label="Добавить баннер">
         <span class="promoAdminAdd__icon">
@@ -503,8 +635,6 @@
       </div>
     `).join('');
   }
-
-
 
   let deliveryMap = null;
   let deliveryCollection = null;
@@ -920,6 +1050,8 @@
       headers: { 'x-admin-password': state.password }
     });
     state.promotions = Array.isArray(data.items) ? data.items : [];
+    state.promotionsSha = data.sha || '';
+    state.originalPromotionsJson = JSON.stringify(state.promotions, null, 2) + '\n';
     updateStats();
     renderPromotions();
   }
@@ -934,8 +1066,6 @@
     updateStats();
     renderPromocodes();
   }
-
-
 
   async function loadDeliveryZones() {
     const data = await fetchJson(`${workerUrl}/api/delivery-zones`, {
@@ -964,6 +1094,7 @@
     if (!state.password) {
       state.unlocked = false;
       updateLockScreen();
+    updateGateView();
       renderProducts();
       renderPromotions();
       renderPromocodes();
@@ -987,6 +1118,7 @@
     state.unlocked = true;
     updateStats();
     updateLockScreen();
+    updateGateView();
     renderProducts();
     renderPromotions();
     renderPromocodes();
@@ -1036,6 +1168,25 @@
     state.originalPromocodesJson = JSON.stringify({ promocodes: state.promocodes }, null, 2) + '\n';
   }
 
+  async function savePromotions() {
+    const currentPromotions = JSON.stringify(state.promotions, null, 2) + '\n';
+    if (currentPromotions === state.originalPromotionsJson) return;
+    const data = await fetchJson(`${workerUrl}/api/promos`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-password': state.password
+      },
+      body: JSON.stringify({
+        items: state.promotions,
+        sha: state.promotionsSha,
+        message: `Update promotions from admin panel ${new Date().toISOString()}`
+      })
+    });
+    state.promotionsSha = data.sha || state.promotionsSha;
+    state.originalPromotionsJson = JSON.stringify(state.promotions, null, 2) + '\n';
+  }
+
   async function saveMenu() {
     const currentMenu = JSON.stringify(state.menu, null, 2) + '\n';
     if (currentMenu === state.originalMenuJson) return;
@@ -1054,8 +1205,6 @@
     state.sha = data.sha || state.sha;
     state.originalMenuJson = JSON.stringify(state.menu, null, 2) + '\n';
   }
-
-
 
   async function saveDeliveryZones() {
     const currentDay = JSON.stringify(state.deliveryZonesDay, null, 2) + '\n';
@@ -1099,18 +1248,23 @@
       showToast('Не настроен workerUrl', true);
       return;
     }
+
     els.saveBtn.disabled = true;
+    els.saveBtn.classList.add('isSaving');
+
     try {
       await saveMenu();
       await savePromocodes();
+      await savePromotions();
       await saveDeliveryZones();
       updateStats();
       setBadge(els.repoStatus, 'Сохранено в GitHub', 'isOk');
-      showToast('Изменения отправлены в GitHub');
+      showToast('Изменения сохранены. Обновление займёт не более 5 минут.');
     } catch (error) {
       showToast(error.message || 'Ошибка сохранения', true);
     } finally {
       els.saveBtn.disabled = false;
+      els.saveBtn.classList.remove('isSaving');
     }
   }
 
@@ -1119,6 +1273,8 @@
     state.menu = [];
     state.promotions = [];
     state.promocodes = [];
+    state.originalPromotionsJson = '[]\n';
+    state.promotionsSha = '';
     state.sha = '';
     state.promoCodesSha = '';
     state.source = '';
@@ -1149,13 +1305,16 @@
     renderDeliveryMap();
     renderOrders();
     updateLockScreen();
+    updateGateView();
+    setActiveSection('menu');
     setBadge(els.workerStatus, 'Ожидает авторизацию', 'isWarn');
     setBadge(els.repoStatus, 'Источник: не загружен', 'isWarn');
   }
 
   async function handleAuthSubmit(event) {
     event.preventDefault();
-    const password = String(new FormData(els.authForm).get('password') || '').trim();
+    const formEl = event?.currentTarget || els.authForm;
+    const password = String(new FormData(formEl).get('password') || '').trim();
     if (!password) {
       sessionStorage.removeItem(passwordStorageKey);
       state.password = '';
@@ -1177,11 +1336,17 @@
         loadOrders(state.ordersQuery).catch(() => {});
       }, ordersRefreshMs);
       closeModal('authModal');
+      if (els.gateAuthForm) {
+        const gateInput = els.gateAuthForm.querySelector('input[name="password"]');
+        if (gateInput) gateInput.value = state.password || '';
+      }
+      updateGateView();
       showToast('Пароль принят');
     } catch (error) {
       sessionStorage.removeItem(passwordStorageKey);
       state.password = '';
       resetLockedState();
+      updateGateView();
       const message = String(error?.message || '');
       const isAuthError = /неверный пароль|401|unauthorized/i.test(message);
       setBadge(els.passwordStatus, isAuthError ? 'Неверный пароль' : 'Ошибка загрузки', 'isWarn');
@@ -1193,6 +1358,23 @@
     els.search?.addEventListener('input', (e) => {
       state.query = e.target.value || '';
       renderProducts();
+    });
+
+    els.mobileMenuBtn?.addEventListener('click', () => toggleMobileMenu(true));
+    els.mobileMenuSheet?.addEventListener('click', (event) => {
+      if (event.target.closest('[data-mobile-menu-close]') || event.target.closest('[data-mobile-nav]')) {
+        toggleMobileMenu(false);
+      }
+    });
+
+    document.querySelectorAll('[data-section-link]').forEach((link) => {
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        const section = link.getAttribute('data-section-link') || 'menu';
+        setActiveSection(section);
+        if (link.hasAttribute('data-mobile-nav')) toggleMobileMenu(false);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
     });
 
     let ordersSearchTimer = null;
@@ -1207,14 +1389,41 @@
 
     els.products?.addEventListener('click', (e) => {
       const editBtn = e.target.closest('[data-edit]');
+      const toggleBtn = e.target.closest('[data-toggle-visible]');
       const deleteBtn = e.target.closest('[data-delete]');
-      if (editBtn) openEditModal(Number(editBtn.dataset.edit));
-      if (deleteBtn) deleteItem(Number(deleteBtn.dataset.delete));
+      if (editBtn) {
+        openEditModal(Number(editBtn.dataset.edit));
+        return;
+      }
+      if (toggleBtn) {
+        const index = Number(toggleBtn.dataset.toggleVisible);
+        if (!Number.isNaN(index) && state.menu[index]) {
+          state.menu[index].visible = state.menu[index].visible === false ? true : false;
+          calcDirty();
+          renderProducts();
+        }
+        return;
+      }
+      if (deleteBtn) {
+        deleteItem(Number(deleteBtn.dataset.delete));
+      }
     });
 
     els.promoGrid?.addEventListener('click', (e) => {
+      const toggleBtn = e.target.closest('[data-toggle-promo-visible]');
       const deleteBtn = e.target.closest('[data-delete-promo]');
-      if (deleteBtn) deletePromotion(deleteBtn.dataset.deletePromo);
+      if (toggleBtn) {
+        const index = Number(toggleBtn.dataset.togglePromoVisible);
+        if (!Number.isNaN(index) && state.promotions[index]) {
+          state.promotions[index].visible = state.promotions[index].visible === false ? true : false;
+          calcDirty();
+          renderPromotions();
+        }
+        return;
+      }
+      if (deleteBtn) {
+        deletePromotion(deleteBtn.dataset.deletePromo);
+      }
     });
 
     els.promoCodeList?.addEventListener('input', (e) => {
@@ -1270,6 +1479,7 @@
 
     els.productForm?.addEventListener('submit', saveProductFromForm);
     els.authForm?.addEventListener('submit', handleAuthSubmit);
+    els.gateAuthForm?.addEventListener('submit', handleAuthSubmit);
     els.authBtn?.addEventListener('click', () => openModal('authModal'));
     els.saveBtn?.addEventListener('click', saveAll);
     els.addProductBtn?.addEventListener('click', openCreateModal);
@@ -1300,6 +1510,8 @@
   function init() {
     bindEvents();
     resetLockedState();
+    setActiveSection('menu');
+    updateGateView();
     if (state.password) loadAll().catch(() => {
       sessionStorage.removeItem(passwordStorageKey);
       state.password = '';
